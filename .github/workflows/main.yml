@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  creat-startup:
+  secure-vps:
     runs-on: windows-latest
     timeout-minutes: 3600
 
