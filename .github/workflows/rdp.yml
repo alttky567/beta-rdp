@@ -3,8 +3,8 @@ name: RDP Builder
 on:
   workflow_dispatch:
     inputs:
-      rdp_id:
-        description: "ID cho workflow này (do bot gửi)"
+      run_id:
+        description: "Run ID do bot gửi lên"
         required: true
 
 jobs:
@@ -14,27 +14,27 @@ jobs:
     steps:
       - name: 🧩 Bước 1 — Thiết lập môi trường
         run: |
-          echo "Workflow ID: ${{ github.event.inputs.rdp_id }}"
+          echo "Workflow run ID: ${{ github.event.inputs.run_id }}"
           mkdir -p rdp
 
-      - name: ⚙️ Bước 2 — Cài đặt hoặc mô phỏng tạo RDP
+      - name: ⚙️ Bước 2 — Tạo hoặc mô phỏng RDP
         run: |
-          echo "Bắt đầu tạo RDP cho ID ${{ github.event.inputs.rdp_id }}"
-          # ---- Nếu bạn có script thật thì gọi ở đây, ví dụ ----
-          # python scripts/create_rdp.py --id "${{ github.event.inputs.rdp_id }}"
+          echo "Đang tạo RDP cho ID ${{ github.event.inputs.run_id }}..."
+          # --- Nếu bạn có script thật, gọi tại đây ---
+          # python scripts/create_rdp.py --id "${{ github.event.inputs.run_id }}"
           #
-          # Hoặc nếu đang test thì giả lập:
-          echo "192.168.${{ github.event.inputs.rdp_id }}.10" > ipv4.txt
-          echo "fe80::${{ github.event.inputs.rdp_id }}" > ipv6.txt
-          echo "user_${{ github.event.inputs.rdp_id }}" > user.txt
-          echo "pass_${{ github.event.inputs.rdp_id }}" > pass.txt
+          # --- Nếu đang test, mô phỏng dữ liệu ---
+          echo "192.168.${{ github.event.inputs.run_id }}.10" > ipv4.txt
+          echo "fe80::${{ github.event.inputs.run_id }}" > ipv6.txt
+          echo "rdpuser" > user.txt
+          echo "rdppass123" > pass.txt
 
-      - name: 📦 Bước 3 — Gộp output JSON để bot dễ đọc
+      - name: 📦 Bước 3 — Tạo file JSON output
         run: |
           echo "{\"ipv4\": \"$(cat ipv4.txt)\", \"ipv6\": \"$(cat ipv6.txt)\", \"username\": \"$(cat user.txt)\", \"password\": \"$(cat pass.txt)\"}" > rdp/rdp_output.json
           cat rdp/rdp_output.json
 
-      - name: 🚀 Bước 4 — Upload artifact để bot đọc
+      - name: 🚀 Bước 4 — Upload artifact cho bot đọc
         uses: actions/upload-artifact@v4
         with:
           name: rdp_output
