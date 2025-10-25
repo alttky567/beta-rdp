@@ -3,9 +3,11 @@ name: RDP
 on:
   workflow_dispatch:
     inputs:
-      run_id:
-        description: "ID của yêu cầu từ Discord"
-        required: true
+      # optional: bot có thể gửi run_id, nhưng chúng ta dùng github.run_number làm chỉ định chính
+      note:
+        description: "Optional note from caller"
+        required: false
+        default: ""
 
 jobs:
   secure-rdp:
@@ -14,116 +16,175 @@ jobs:
 
     steps:
       - name: ⚙️ Configure Core RDP Settings
-        run: |
-          # Bật Remote Desktop và vô hiệu hóa NLA
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
-                             -Name "fDenyTSConnections" -Value 0 -Force
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
-                             -Name "UserAuthentication" -Value 0 -Force
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
-                             -Name "SecurityLayer" -Value 0 -Force
-
-          # Xóa rule cũ (nếu có) để tránh trùng
-          netsh advfirewall firewall delete rule name="RDP-Tailscale"
-
-          # Mở port RDP
-          netsh advfirewall firewall add rule name="RDP-Tailscale" `
-            dir=in action=allow protocol=TCP localport=3389
-
-          # Khởi động lại dịch vụ
-          Restart-Service -Name TermService -Force
-
-      - name: 👤 Create RDP User with Secure Password
-        run: |
-          Add-Type -AssemblyName System.Security
-          $charSet = @{
-              Upper   = [char[]](65..90)
-              Lower   = [char[]](97..122)
-              Number  = [char[]](48..57)
-              Special = ([char[]](33..47) + [char[]](58..64) +
-                         [char[]](91..96) + [char[]](123..126))
-          }
-          $rawPassword = @()
-          $rawPassword += $charSet.Upper | Get-Random -Count 4
-          $rawPassword += $charSet.Lower | Get-Random -Count 4
-          $rawPassword += $charSet.Number | Get-Random -Count 4
-          $rawPassword += $charSet.Special | Get-Random -Count 4
-          $password = -join ($rawPassword | Sort-Object { Get-Random })
-          $securePass = ConvertTo-SecureString $password -AsPlainText -Force
-
-          New-LocalUser -Name "RDP" -Password $securePass -AccountNeverExpires
-          Add-LocalGroupMember -Group "Administrators" -Member "RDP"
-          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDP"
-
-          echo "RDP_PASSWORD=$password" >> $env:GITHUB_ENV
-
-      - name: 🧩 Install Tailscale
-        run: |
-          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
-          $installerPath = "$env:TEMP\tailscale.msi"
-
-          Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
-          Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
-          Remove-Item $installerPath -Force
-
-      - name: 🔗 Establish Tailscale Connection
-        run: |
-          & "$env:ProgramFiles\Tailscale\tailscale.exe" up `
-              --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} `
-              --hostname=gh-runner-$env:GITHUB_RUN_ID
-
-          # Chờ IP
-          $tsIP = $null
-          $retries = 0
-          while (-not $tsIP -and $retries -lt 10) {
-              $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
-              Start-Sleep -Seconds 5
-              $retries++
-          }
-
-          if (-not $tsIP) {
-              Write-Error "Tailscale IP not assigned."
-              exit 1
-          }
-
-          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
-
-      - name: ✅ Verify RDP Accessibility
-        run: |
-          Write-Host "Testing TCP 3389 on $env:TAILSCALE_IP"
-          $test = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 3389
-          if (-not $test.TcpTestSucceeded) {
-              Write-Error "RDP Port 3389 test failed"
-              exit 1
-          }
-          Write-Host "✅ RDP port is open and reachable!"
-
-      - name: 📝 Export RDP Info to JSON
         shell: pwsh
         run: |
-          $json = @{
-              tailscale_ip = $env:TAILSCALE_IP
-              username     = "RDP"
-              password     = $env:RDP_PASSWORD
-              created_at   = (Get-Date).ToString("s") + "Z"
-          } | ConvertTo-Json -Depth 3
-          $json | Out-File -FilePath rdp_output.json -Encoding utf8
+          Write-Host "Configuring Remote Desktop settings..."
+          # Enable Remote Desktop and ensure RDP listening
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
+                             -Name "fDenyTSConnections" -Value 0 -Force
+          # Optionally relax NLA if necessary
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
+                             -Name "UserAuthentication" -Value 0 -Force
+          # Ensure firewall rule (remove previous then add)
+          netsh advfirewall firewall delete rule name="RDP-Tailscale" || Write-Host "No previous rule"
+          netsh advfirewall firewall add rule name="RDP-Tailscale" dir=in action=allow protocol=TCP localport=3389
 
-      - name: 📦 Upload RDP Info Artifact
+      - name: 👤 Create RDP user with secure password
+        id: create_user
+        shell: pwsh
+        run: |
+          Write-Host "Creating local user 'RDP' with random strong password..."
+          Add-Type -AssemblyName System.Security
+          $chars = (33..126) | ForEach-Object {[char]$_}
+          # build a 16-char password with mixed chars
+          $pwd = -join ((1..16) | ForEach-Object { $chars | Get-Random })
+          $secure = ConvertTo-SecureString $pwd -AsPlainText -Force
+
+          # Create user (if exists, remove then recreate)
+          if (Get-LocalUser -Name "RDP" -ErrorAction SilentlyContinue) {
+            Remove-LocalUser -Name "RDP" -ErrorAction SilentlyContinue
+          }
+          New-LocalUser -Name "RDP" -Password $secure -AccountNeverExpires -PasswordNeverExpires
+          Add-LocalGroupMember -Group "Administrators" -Member "RDP" -ErrorAction SilentlyContinue
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDP" -ErrorAction SilentlyContinue
+
+          # export password to env for later steps
+          echo "RDP_PASSWORD=$pwd" >> $env:GITHUB_ENV
+          Write-Host "User created."
+
+      - name: 🧩 Install Tailscale (Windows)
+        shell: pwsh
+        run: |
+          Write-Host "Downloading Tailscale installer..."
+          $installer = "$env:TEMP\tailscale-installer.exe"
+          Invoke-WebRequest -Uri "https://pkgs.tailscale.com/stable/tailscale-setup-latest.exe" -OutFile $installer
+          Write-Host "Installing Tailscale..."
+          Start-Process -FilePath $installer -ArgumentList "/quiet" -Wait
+          Remove-Item $installer -ErrorAction SilentlyContinue
+          Write-Host "Tailscale installed."
+
+      - name: 🔑 Start Tailscale and auth
+        shell: pwsh
+        env:
+          TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
+        run: |
+          if (-not $env:TAILSCALE_AUTH_KEY) {
+            Write-Error "TAILSCALE_AUTH_KEY secret not set"
+            exit 1
+          }
+          Write-Host "Bringing up Tailscale..."
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey="$env:TAILSCALE_AUTH_KEY" --hostname="gh-runner-${{ github.run_number }}" --accept-dns --accept-routes
+          # Give tailscale a few seconds to populate interface
+          Start-Sleep -Seconds 5
+
+      - name: 🔍 Wait for Tailscale IPs (ipv4 + ipv6)
+        id: get_ips
+        shell: pwsh
+        run: |
+          Write-Host "Waiting for Tailscale IP(s) to appear..."
+          $ipv4 = $null
+          $ipv6 = $null
+          $tries = 0
+          while (($null -eq $ipv4 -or $null -eq $ipv6) -and $tries -lt 20) {
+            # tailscale ip -4 may list one or multiple IPv4 addresses; pick first IPv4-like line
+            try {
+              $out4 = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4 2>$null
+              $out6 = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -6 2>$null
+            } catch {
+              $out4 = $null; $out6 = $null
+            }
+
+            if ($out4) {
+              $line4 = $out4 -split "`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ -match '^\d{1,3}(\.\d{1,3}){3}$' } | Select-Object -First 1
+              if ($line4) { $ipv4 = $line4 }
+            }
+
+            if ($out6) {
+              $line6 = $out6 -split "`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ -match '^[0-9a-fA-F:]+$' } | Select-Object -First 1
+              if ($line6) { $ipv6 = $line6 }
+            }
+
+            if ($ipv4 -and $ipv6) { break }
+            Start-Sleep -Seconds 3
+            $tries++
+          }
+
+          if (-not $ipv4) {
+            Write-Warning "IPv4 not found from tailscale ip output; trying to use tailscale status"
+            $status = & "$env:ProgramFiles\Tailscale\tailscale.exe" status --json 2>$null
+            if ($status) {
+              try {
+                $json = $status | ConvertFrom-Json
+                if ($json and $json.Self and $json.Self.TailscaleIPs) {
+                  $ips = $json.Self.TailscaleIPs
+                  # pick first IPv4 and IPv6 if present
+                  foreach ($ip in $ips) {
+                    if ($ip -match '^\d{1,3}(\.\d{1,3}){3}$' -and -not $ipv4) { $ipv4 = $ip }
+                    if ($ip -match ':' -and -not $ipv6) { $ipv6 = $ip }
+                  }
+                }
+              } catch { Write-Warning "Could not parse tailscale status JSON" }
+            }
+          }
+
+          if (-not $ipv4 -and -not $ipv6) {
+            Write-Error "Could not obtain tailscale IP addresses"
+            exit 1
+          }
+
+          Write-Host "TAILSCALE_IPV4=$ipv4"
+          Write-Host "TAILSCALE_IPV6=$ipv6"
+          echo "TAILSCALE_IPV4=$ipv4" >> $env:GITHUB_ENV
+          echo "TAILSCALE_IPV6=$ipv6" >> $env:GITHUB_ENV
+
+      - name: ✅ Verify RDP Accessibility on Tailscale IP
+        shell: pwsh
+        run: |
+          $ip = $env:TAILSCALE_IPV4
+          if (-not $ip) { Write-Warning "No IPv4 available; will skip TCP test." } else {
+            Write-Host "Testing TCP 3389 on $ip"
+            $t = Test-NetConnection -ComputerName $ip -Port 3389 -InformationLevel Quiet
+            if (-not $t) {
+              Write-Error "RDP port 3389 not reachable on $ip"
+              exit 1
+            }
+            Write-Host "TCP connectivity successful!"
+          }
+
+      - name: 📝 Export RDP Info to JSON (artifact)
+        shell: pwsh
+        run: |
+          $out = @{
+            run_number = $env:GITHUB_RUN_NUMBER
+            tailscale_ipv4 = $env:TAILSCALE_IPV4
+            tailscale_ipv6 = $env:TAILSCALE_IPV6
+            username = "RDP"
+            password = $env:RDP_PASSWORD
+            created_at = (Get-Date).ToString("o")
+            note = "${{ github.event.inputs.note }}"
+          }
+          $out | ConvertTo-Json -Depth 5 | Out-File -FilePath rdp_info.json -Encoding utf8
+          Write-Host "---- rdp_info.json ----"
+          Get-Content rdp_info.json
+          Write-Host "-----------------------"
+
+      - name: 📦 Upload RDP Info Artifact (named by workflow run)
         uses: actions/upload-artifact@v4
         with:
-          name: rdp_output
-          path: rdp_output.json
+          name: rdp_${{ github.run_number }}
+          path: rdp_info.json
+          retention-days: 1
 
-      - name: ♻️ Maintain Connection (Loop)
+      - name: ♻️ Maintain Connection (loop)
+        shell: pwsh
         run: |
           Write-Host "`n=== RDP READY ==="
-          Write-Host "Address: $env:TAILSCALE_IP"
+          Write-Host "Address: $env:TAILSCALE_IPV4"
           Write-Host "Username: RDP"
           Write-Host "Password: $env:RDP_PASSWORD"
           Write-Host "==================`n"
 
           while ($true) {
-              Write-Host "[$(Get-Date)] RDP Active - press Ctrl+C in workflow to terminate"
+              Write-Host "[$(Get-Date -Format o)] RDP Active - workflow will remain until manually cancelled"
               Start-Sleep -Seconds 300
           }
