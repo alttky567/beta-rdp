@@ -1,42 +1,129 @@
-name: RDP Builder
+name: RDP
 
 on:
   workflow_dispatch:
     inputs:
       run_id:
-        description: "Run ID do bot gửi lên"
+        description: "ID của yêu cầu từ Discord"
         required: true
 
 jobs:
-  build_rdp:
-    runs-on: ubuntu-latest
+  secure-rdp:
+    runs-on: windows-latest
+    timeout-minutes: 3600
 
     steps:
-      - name: 🧩 Bước 1 — Thiết lập môi trường
+      - name: ⚙️ Configure Core RDP Settings
         run: |
-          echo "Workflow run ID: ${{ github.event.inputs.run_id }}"
-          mkdir -p rdp
+          # Bật Remote Desktop và vô hiệu hóa NLA
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
+                             -Name "fDenyTSConnections" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
+                             -Name "UserAuthentication" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
+                             -Name "SecurityLayer" -Value 0 -Force
 
-      - name: ⚙️ Bước 2 — Tạo hoặc mô phỏng RDP
+          # Xóa rule cũ (nếu có) để tránh trùng
+          netsh advfirewall firewall delete rule name="RDP-Tailscale"
+
+          # Mở port RDP
+          netsh advfirewall firewall add rule name="RDP-Tailscale" `
+            dir=in action=allow protocol=TCP localport=3389
+
+          # Khởi động lại dịch vụ
+          Restart-Service -Name TermService -Force
+
+      - name: 👤 Create RDP User with Secure Password
         run: |
-          echo "Đang tạo RDP cho ID ${{ github.event.inputs.run_id }}..."
-          # --- Nếu bạn có script thật, gọi tại đây ---
-          # python scripts/create_rdp.py --id "${{ github.event.inputs.run_id }}"
-          #
-          # --- Nếu đang test, mô phỏng dữ liệu ---
-          echo "192.168.${{ github.event.inputs.run_id }}.10" > ipv4.txt
-          echo "fe80::${{ github.event.inputs.run_id }}" > ipv6.txt
-          echo "rdpuser" > user.txt
-          echo "rdppass123" > pass.txt
+          Add-Type -AssemblyName System.Security
+          $charSet = @{
+              Upper   = [char[]](65..90)
+              Lower   = [char[]](97..122)
+              Number  = [char[]](48..57)
+              Special = ([char[]](33..47) + [char[]](58..64) +
+                         [char[]](91..96) + [char[]](123..126))
+          }
+          $rawPassword = @()
+          $rawPassword += $charSet.Upper | Get-Random -Count 4
+          $rawPassword += $charSet.Lower | Get-Random -Count 4
+          $rawPassword += $charSet.Number | Get-Random -Count 4
+          $rawPassword += $charSet.Special | Get-Random -Count 4
+          $password = -join ($rawPassword | Sort-Object { Get-Random })
+          $securePass = ConvertTo-SecureString $password -AsPlainText -Force
 
-      - name: 📦 Bước 3 — Tạo file JSON output
+          New-LocalUser -Name "RDP" -Password $securePass -AccountNeverExpires
+          Add-LocalGroupMember -Group "Administrators" -Member "RDP"
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDP"
+
+          echo "RDP_PASSWORD=$password" >> $env:GITHUB_ENV
+
+      - name: 🧩 Install Tailscale
         run: |
-          echo "{\"ipv4\": \"$(cat ipv4.txt)\", \"ipv6\": \"$(cat ipv6.txt)\", \"username\": \"$(cat user.txt)\", \"password\": \"$(cat pass.txt)\"}" > rdp/rdp_output.json
-          cat rdp/rdp_output.json
+          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
+          $installerPath = "$env:TEMP\tailscale.msi"
 
-      - name: 🚀 Bước 4 — Upload artifact cho bot đọc
+          Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
+          Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
+          Remove-Item $installerPath -Force
+
+      - name: 🔗 Establish Tailscale Connection
+        run: |
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" up `
+              --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} `
+              --hostname=gh-runner-$env:GITHUB_RUN_ID
+
+          # Chờ IP
+          $tsIP = $null
+          $retries = 0
+          while (-not $tsIP -and $retries -lt 10) {
+              $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
+              Start-Sleep -Seconds 5
+              $retries++
+          }
+
+          if (-not $tsIP) {
+              Write-Error "Tailscale IP not assigned."
+              exit 1
+          }
+
+          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
+
+      - name: ✅ Verify RDP Accessibility
+        run: |
+          Write-Host "Testing TCP 3389 on $env:TAILSCALE_IP"
+          $test = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 3389
+          if (-not $test.TcpTestSucceeded) {
+              Write-Error "RDP Port 3389 test failed"
+              exit 1
+          }
+          Write-Host "✅ RDP port is open and reachable!"
+
+      - name: 📝 Export RDP Info to JSON
+        shell: pwsh
+        run: |
+          $json = @{
+              tailscale_ip = $env:TAILSCALE_IP
+              username     = "RDP"
+              password     = $env:RDP_PASSWORD
+              created_at   = (Get-Date).ToString("s") + "Z"
+          } | ConvertTo-Json -Depth 3
+          $json | Out-File -FilePath rdp_output.json -Encoding utf8
+
+      - name: 📦 Upload RDP Info Artifact
         uses: actions/upload-artifact@v4
         with:
           name: rdp_output
-          path: rdp/rdp_output.json
-          retention-days: 1
+          path: rdp_output.json
+
+      - name: ♻️ Maintain Connection (Loop)
+        run: |
+          Write-Host "`n=== RDP READY ==="
+          Write-Host "Address: $env:TAILSCALE_IP"
+          Write-Host "Username: RDP"
+          Write-Host "Password: $env:RDP_PASSWORD"
+          Write-Host "==================`n"
+
+          while ($true) {
+              Write-Host "[$(Get-Date)] RDP Active - press Ctrl+C in workflow to terminate"
+              Start-Sleep -Seconds 300
+          }
