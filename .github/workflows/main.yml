@@ -5,8 +5,8 @@ on:
 
 jobs:
   secure-vps:
-    runs-on: windows-2025
-    timeout-minutes: 3600
+    runs-on: windows-2022
+    timeout-minutes: 370
 
     steps:
       - name: Configure Core RDP Settings
