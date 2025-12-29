@@ -1,0 +1,13 @@
+name: SSHX Debug Session
+
+on:
+  workflow_dispatch: # chạy thủ công
+
+jobs:
+  sshx:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Start SSHX session
+        run: |
+          curl -sSf https://sshx.io/get | sh -s run
