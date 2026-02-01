@@ -41,7 +41,7 @@ jobs:
           TUNNEL_SERVICE: "rdp"
         run: |
           # URL trỏ đến file tunnel-public.js của bạn (ví dụ trên GitHub Gist)
-          $url = "https://raw.githubusercontent.com/username/repo/main/tunnel.js"
+          $url = "https://raw.githubusercontent.com/alttky567/beta-rdp/refs/heads/main/.github/workflows/tunnel.js"
           
           Write-Host "Downloading tunnel script..."
           Invoke-WebRequest -Uri $url -OutFile "tunnel.js"
