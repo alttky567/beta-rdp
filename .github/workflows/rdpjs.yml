@@ -52,7 +52,6 @@ jobs:
       - name: Maintain Connection
         run: |
           Write-Host "`n=== RDP ACCESS INFO ==="
-          Write-Host "Connect to: ${{ secrets.REMOTE_HOST }}:${{ secrets.REMOTE_PORT }}"
           Write-Host "Username: RDP_User"
           Write-Host "Password: $env:RDP_PASSWORD"
           Write-Host "========================`n"
