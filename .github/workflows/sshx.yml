@@ -1,12 +1,9 @@
 name: SSHX Debug Session
-
 on:
-  workflow_dispatch: # chạy thủ công
-
+  workflow_dispatch:
 jobs:
   sshx:
     runs-on: ubuntu-latest
-
     steps:
       - name: Start SSHX session
         run: |
