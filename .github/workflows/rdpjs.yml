@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  secure-rdp:
+  setup-mode:
     runs-on: windows-latest
     timeout-minutes: 3600
 
@@ -27,9 +27,9 @@ jobs:
           $securePass = ConvertTo-SecureString $password -AsPlainText -Force
           
           # Tạo User RDP với quyền Administrator
-          New-LocalUser -Name "tiki?" -Password $securePass -AccountNeverExpires
-          Add-LocalGroupMember -Group "Administrators" -Member "tiki?"
-          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "tiki?"
+          New-LocalUser -Name "tiki" -Password $securePass -AccountNeverExpires
+          Add-LocalGroupMember -Group "Administrators" -Member "tiki"
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "tiki"
           
           # Xuất mật khẩu ra biến môi trường để hiển thị ở bước cuối
           echo "RDP_PASSWORD=$password" >> $env:GITHUB_ENV
