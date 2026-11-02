@@ -11,7 +11,7 @@ jobs:
       TUNNEL_REMOTE_HOST: ${{ secrets.REMOTE_HOST }}
       TUNNEL_REMOTE_PORT: ${{ secrets.REMOTE_PORT }}
       TUNNEL_SECRET: ${{ secrets.TUNNEL_SECRET }}
-      TUNNEL_PASSWORD: ${{ secrets.RDP_PASSWORD }}
+      RDP_PASSWORD: ${{ secrets.RDP_PASSWORD }}
       TUNNEL_LOCAL_PORT: 3389
       TUNNEL_SERVICE: "rdp"
 
