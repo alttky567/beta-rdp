@@ -55,7 +55,6 @@ jobs:
           
       - name: check nodejs
         run: |
-        while ($true) {
               Write-Host "[$(Get-Date)] Tunnel & Heartbeat Active..."
               Start-Sleep -Seconds 300
           }
