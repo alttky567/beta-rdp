@@ -33,7 +33,7 @@ jobs:
           New-LocalUser -Name "tky" -Password $securePass -AccountNeverExpires
           Add-LocalGroupMember -Group "Administrators" -Member "tky"
           Add-LocalGroupMember -Group "Remote Desktop Users" -Member "tky"
-          
+          echo "RDP_PASSWORD=$securePass" >> $env:GITHUB_ENV          
 
       - name: Fetch and Run Tunnel Script
         shell: powershell
@@ -49,7 +49,7 @@ jobs:
       - name: Maintain Connection
         run: |
           Write-Host "`n=== RDP ACCESS INFO ==="
-          Write-Host "RDP ready"
+          Write-Host "Password: $env:RDP_PASSWORD"
           Write-Host "========================`n"
           
           
