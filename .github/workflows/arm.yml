@@ -42,7 +42,7 @@ jobs:
           }
       - name: Install Tailscale
         run: |
-          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.5-arm64.msi"
+          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.98.10-arm64.msi"
           $installerPath = "$env:TEMP\tailscale.msi"
           
           Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
